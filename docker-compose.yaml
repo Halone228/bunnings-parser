@@ -1,10 +1,30 @@
 version: "3"
+networks:
+  parser:
 services:
   parser:
     build: .
     volumes:
-      - ./results:/app/results
+      - ./data:/app/data
       - ./output:/app/output
       - ./tasks:/app/tasks
       - ./profiles:/app/profiles
-    shm_size: "8gb"
+      - ./parser_bb:/app/parser_bb
+    shm_size: "5gb"
+    environment:
+      - POSTGRES_PASSWORD=pass
+      - POSTGRES_USER=default
+      - POSTGRES_DB=db
+      - POSTGRES_HOST=postgres
+    depends_on:
+      - postgres
+    networks:
+      - parser
+  postgres:
+    image: postgres:latest
+    environment:
+      - POSTGRES_PASSWORD=pass
+      - POSTGRES_USER=default
+      - POSTGRES_DB=db
+    networks:
+      - parser

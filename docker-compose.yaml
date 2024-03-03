@@ -1,0 +1,10 @@
+version: "3"
+services:
+  parser:
+    build: .
+    volumes:
+      - ./results:/app/results
+      - ./output:/app/output
+      - ./tasks:/app/tasks
+      - ./profiles:/app/profiles
+    shm_size: "8gb"

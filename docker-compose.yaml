@@ -16,6 +16,8 @@ services:
       - POSTGRES_USER=default
       - POSTGRES_DB=db
       - POSTGRES_HOST=postgres
+      - MAX_BROWSERS=5 # Максимальное количство браузеров, сколько может открыть программа
+      - BROWSER_MEMORY=600 # Этот парметр указывает на количство памяти, потребляемое одним браузером
     depends_on:
       - postgres
     networks:

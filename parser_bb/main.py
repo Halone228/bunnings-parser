@@ -1,11 +1,11 @@
-from functools import reduce, lru_cache
-
+from functools import lru_cache
 import loguru
 from botasaurus import request, AntiDetectRequests, browser, AntiDetectDriver
+from botasaurus.cache import DontCache
 from botasaurus.create_stealth_driver import create_stealth_driver
-from json import load, loads
-
-from sqlalchemy import select
+from json import loads
+from os import getenv
+from sqlalchemy import select, update
 
 from .database import (
     insert_data,
@@ -15,8 +15,13 @@ from .database import (
     get_all_urls,
     ProductModel,
     engine,
+    set_stock_parsed,
+    update_data,
+    compress_full_info_parsed,
+    compress_stock_parsed,
+    set_full_info_parsed,
+    sesmaker,
 )
-from uuid import uuid4
 
 from botasaurus.user_agent import UserAgent
 from jwt import decode
@@ -75,8 +80,13 @@ def main_start():
         }
 
     @browser(
-        create_driver=create_stealth_driver("https://www.bunnings.com.au/products"),
-        headless=True,
+        create_driver=create_stealth_driver(
+            "https://www.bunnings.com.au/products", wait=15
+        ),
+        user_agent=UserAgent.user_agent_106,
+        max_retry=5,
+        retry_wait=4,
+        reuse_driver=True,
     )
     def get_page(driver: AntiDetectDriver, data):
         main_links = driver.links(".article-card>a")
@@ -140,7 +150,7 @@ def main_start():
             def_payload["firstResult"] = tries * num_res
             yield {"payload": def_payload, "headers": _headers}
 
-    @request(parallel=4)
+    @request(parallel=2)
     def get_group_count(client: AntiDetectRequests, data: ParseData):
         payload = generate_json_from_mako(data["user_id"], data["group"])
         payload["numberOfResults"] = "0"
@@ -153,7 +163,9 @@ def main_start():
     @browser(
         reuse_driver=True,
         create_driver=create_stealth_driver(start_url=get_start_url, wait=15),
-        parallel=calc_max_parallel_browsers,
+        parallel=calc_max_parallel_browsers.calc_max_parallel_browsers(
+            max=int(getenv("MAX_BROWSERS", 7))
+        ),
         headless=True,
         block_images=True,
         block_resources=True,
@@ -168,15 +180,20 @@ def main_start():
         breadcrumbs = [
             i.text.strip() for i in soup.select("nav[aria-label=Breadcrumb] > ul > li")
         ][3:5]
-        description = soup.select_one(
-            "[data-locator=features_list]"
-        ).parent.text.strip()
-        return {
+        try:
+            description = soup.select_one(
+                "[data-locator=features_list]"
+            ).parent.text.strip()
+        except:
+            description = ""
+        _st = {
             "url": data,
             "description": description,
             "breadcrumbs": "->".join(breadcrumbs),
             "images": "\n".join(images),
         }
+        set_full_info_parsed([_st])
+        update_data([_st])
 
     def _reduce(a, v):
         a.extend(v)
@@ -210,9 +227,15 @@ def main_start():
             )
         )
         insert_data(data) if data else None
+        # with sesmaker() as session:
+        #     session.execute(
+        #         update(ProductModel),
+        #         [{'article': i['article'], 'name': i['name']} for i in data]
+        #     )
+        #     session.commit()
 
     @request(
-        parallel=20,
+        parallel=15,
     )
     def get_count(client: AntiDetectRequests, data):
         nonlocal stock_data_loader
@@ -248,6 +271,7 @@ def main_start():
                     prod["stock"].get("stockLevel", 0)
                 )
         update_stock([{"article": k, "count": v} for k, v in code_data.items()])
+        set_stock_parsed(code_data)
 
     links, headers, cookies = get_page()
     counts = get_group_count(
@@ -261,16 +285,18 @@ def main_start():
     )
     get_info(list(generate_api_endpoints(counts, headers)))
     del first_level_data
+
     stock_data_loader = tqdm(desc="Stock data parse", total=get_products_count())
     get_count(
         [
             {"headers": headers, "products": data}
-            for data in chunks(get_all_articles(), 7)
+            for data in chunks(list(compress_stock_parsed(get_all_articles())), 7)
         ]
     )
     del stock_data_loader
     full_info = tqdm(desc="Full info parse", total=get_products_count())
-    get_product_page(get_all_urls())
+    product_page_ul = list(compress_full_info_parsed(get_all_urls()))
+    get_product_page(product_page_ul)
     del full_info
 
     df: DataFrame = read_sql(
